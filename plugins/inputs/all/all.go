@@ -1,6 +1,7 @@
 package all
 
 import (
+	_ "github.com/bbczeuz/telegraf/plugins/inputs/sqlquery"
 	_ "github.com/influxdata/telegraf/plugins/inputs/aerospike"
 	_ "github.com/influxdata/telegraf/plugins/inputs/apache"
 	_ "github.com/influxdata/telegraf/plugins/inputs/bcache"

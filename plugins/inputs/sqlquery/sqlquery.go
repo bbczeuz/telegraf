@@ -1,4 +1,4 @@
-package system
+package sqlquery
 
 import (
 	_ "errors"
@@ -16,7 +16,7 @@ type SqlQuery struct {
 	ServerUrl   string
 	Queries   []string
 	TagCols   []string
-	DB *sql.DB
+	//DB *sql.DB //TODO: Avoid reconnects: Push DB driver to struct?
 }
 
 var sampleConfig = `

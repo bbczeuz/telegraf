@@ -5,13 +5,15 @@ import (
 	_ "fmt"
 	"database/sql"
 	_ "github.com/mattn/go-oci8"
+//	_ "github.com/go-sql-driver/mysql"
+//	_ "github.com/lib/pq"
+//	_ "github.com/denisenkom/go-mssqldb"
 
 	"github.com/influxdata/telegraf"
 	"github.com/influxdata/telegraf/plugins/inputs"
 )
 
 type SqlQuery struct {
-	Name        string
 	Driver      string
 	ServerUrl   string
 	Queries   []string
@@ -20,9 +22,6 @@ type SqlQuery struct {
 }
 
 var sampleConfig = `
-  ## Measurement name
-  name = "sqlquery" # required
-
   ## DB Driver
   driver = "oci8" # required. Options: oci8 (Oracle), postgres
 
@@ -43,12 +42,8 @@ func (_ *SqlQuery) Description() string {
 }
 
 func (s *SqlQuery) setDefaultValues() {
-	if len(s.Name) == 0 {
-		s.Name = "sqlquery"
-	}
-
 	if len(s.Driver) == 0 {
-		s.Name = "oci8"
+		s.Driver = "oci8"
 	}
 
 	if len(s.ServerUrl) == 0 {
@@ -136,6 +131,7 @@ func (s *SqlQuery) Gather(acc telegraf.Accumulator) error {
 			//Split into tags and fields
 			for i:= 0; i<tag_count; i++ {
 				if (cells[tag_idx[i]] != nil) {
+					//Tags are always strings
 					tags[cols[tag_idx[i]]] = string(cells[tag_idx[i]]);
 				}
 			}
@@ -157,7 +153,7 @@ func (s *SqlQuery) Gather(acc telegraf.Accumulator) error {
 				"tagkey2":  "tagval2",
 			}
 */
-			acc.AddFields(s.Name, fields, tags)
+			acc.AddFields("sqlquery", fields, tags)
 		}
 
 	}

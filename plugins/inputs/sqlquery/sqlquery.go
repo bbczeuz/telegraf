@@ -1,6 +1,7 @@
 package sqlquery
 
 import (
+	"log"
 	_ "errors"
 	_ "fmt"
 	"database/sql"
@@ -69,11 +70,15 @@ func contains_str(key string, str_array []string) bool {
 func (s *SqlQuery) Gather(acc telegraf.Accumulator) error {
 	var err error
 	drv, dsn := s.Driver, s.ServerUrl
+
+	log.Printf("Input  [sqlquery] Connecting to DB...");
+
 	db, err := sql.Open(drv, dsn)
 	if err != nil {
 		return err
 //		log.Fatalf("cannot connect with %q to %q: %v", drv, dsn, err)
 	}
+	log.Printf("Input  [sqlquery] Pinging DB...");
 	err = db.Ping()
 	if err != nil {
 		return err
@@ -83,6 +88,7 @@ func (s *SqlQuery) Gather(acc telegraf.Accumulator) error {
 
 	//Perform queries
 	for _, query := range s.Queries {
+		log.Printf("Input  [sqlquery] Performing query '%s'...", query);
 		rows, err := db.Query(query);
 		if err != nil {
 			return err;
@@ -113,6 +119,7 @@ func (s *SqlQuery) Gather(acc telegraf.Accumulator) error {
 			}
 		}
 
+		log.Printf("Input  [sqlquery] Query '%s' received %d tags and %d fields...", query, tag_count, field_count);
 
 		cells  := make([]sql.RawBytes, col_count);
 		cell_refs := make([]interface{}, col_count);

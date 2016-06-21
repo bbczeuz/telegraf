@@ -34,7 +34,7 @@ var sampleConfig = `
   ## Queries to perform
   queries  = ["SELECT * FROM tablename"] # required
   tag_cols = ["location"] # use these columns as tag keys (cells -> tag values)
-  int_fields = ["used_count"] # convert these columns to int64 (all other remain strings)
+  int_fields = ["used_count"] # convert these columns to int64 (all other are converted to strings)
 `
 
 func (s *SqlQuery) SampleConfig() string {

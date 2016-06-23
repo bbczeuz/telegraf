@@ -16,11 +16,13 @@ import (
 )
 
 type SqlQuery struct {
-	Driver    string
-	ServerUrl string
-	Queries   []string
-	TagCols   []string
-	IntFields []string
+	Driver      string
+	ServerUrl   string
+	Queries     []string
+	TagCols     []string
+	IntFields   []string
+	FloatFields []string
+	BoolFields  []string
 	//DB *sql.DB //TODO: Avoid reconnects: Push DB driver to struct?
 }
 
@@ -34,7 +36,9 @@ var sampleConfig = `
   ## Queries to perform
   queries  = ["SELECT * FROM tablename"] # required
   tag_cols = ["location"] # use these columns as tag keys (cells -> tag values)
-  int_fields = ["used_count"] # convert these columns to int64 (all other are converted to strings)
+  int_fields = ["used_count"] # convert these columns to int64
+  float_fields = ["bandwidth_recv"] # convert these columns to float64
+  bool_fields = ["is_active"] # convert these columns to bool
 `
 
 func (s *SqlQuery) SampleConfig() string {
@@ -103,29 +107,37 @@ func (s *SqlQuery) Gather(acc telegraf.Accumulator) error {
 
 		//Split tag and field cols
 		col_count := len(cols)
-		tag_idx := make([]int, col_count)       //Column indexes of tags
-		int_field_idx := make([]int, col_count) //Column indexes of int fields
-		str_field_idx := make([]int, col_count) //Column indexes of string fields
+		tag_idx := make([]int, col_count)         //Column indexes of tags
+		int_field_idx := make([]int, col_count)   //Column indexes of int fields
+		float_field_idx := make([]int, col_count) //Column indexes of int fields
+		bool_field_idx := make([]int, col_count)  //Column indexes of int fields
+		str_field_idx := make([]int, col_count)   //Column indexes of string fields
 
 		tag_count := 0
 		int_field_count := 0
+		float_field_count := 0
+		bool_field_count := 0
 		str_field_count := 0
 		for i := 0; i < col_count; i++ {
 			if contains_str(cols[i], s.TagCols) {
 				tag_idx[tag_count] = i
 				tag_count++
+			} else if contains_str(cols[i], s.IntFields) {
+				int_field_idx[int_field_count] = i
+				int_field_count++
+			} else if contains_str(cols[i], s.FloatFields) {
+				float_field_idx[float_field_count] = i
+				float_field_count++
+			} else if contains_str(cols[i], s.BoolFields) {
+				bool_field_idx[bool_field_count] = i
+				bool_field_count++
 			} else {
-				if contains_str(cols[i], s.IntFields) {
-					int_field_idx[int_field_count] = i
-					int_field_count++
-				} else {
-					str_field_idx[str_field_count] = i
-					str_field_count++
-				}
+				str_field_idx[str_field_count] = i
+				str_field_count++
 			}
 		}
 
-		log.Printf("Input  [sqlquery] Query '%s' received %d tags and %d (int) + %d (str) fields...", query, tag_count, int_field_count, str_field_count)
+		log.Printf("Input  [sqlquery] Query '%s' received %d tags and %d (int) + %d (float) + %d (bool) + %d (str) fields...", query, tag_count, int_field_count, float_field_count, bool_field_count, str_field_count)
 
 		//Allocate arrays for field storage
 		cells := make([]sql.RawBytes, col_count)
@@ -150,6 +162,8 @@ func (s *SqlQuery) Gather(acc telegraf.Accumulator) error {
 					tags[cols[tag_idx[i]]] = string(cells[tag_idx[i]])
 				}
 			}
+
+			//Extract int fields
 			for i := 0; i < int_field_count; i++ {
 				if cells[int_field_idx[i]] != nil {
 					fields[cols[int_field_idx[i]]], err = strconv.ParseInt(string(cells[int_field_idx[i]]), 10, 64)
@@ -158,6 +172,25 @@ func (s *SqlQuery) Gather(acc telegraf.Accumulator) error {
 					}
 				}
 			}
+			//Extract float fields
+			for i := 0; i < float_field_count; i++ {
+				if cells[float_field_idx[i]] != nil {
+					fields[cols[float_field_idx[i]]], err = strconv.ParseFloat(string(cells[float_field_idx[i]]), 64)
+					if err != nil {
+						return err
+					}
+				}
+			}
+			//Extract bool fields
+			for i := 0; i < bool_field_count; i++ {
+				if cells[bool_field_idx[i]] != nil {
+					fields[cols[bool_field_idx[i]]], err = strconv.ParseBool(string(cells[bool_field_idx[i]]))
+					if err != nil {
+						return err
+					}
+				}
+			}
+			//Extract remaining fields as strings
 			for i := 0; i < str_field_count; i++ {
 				if cells[str_field_idx[i]] != nil {
 					fields[cols[str_field_idx[i]]] = string(cells[str_field_idx[i]])

@@ -23,6 +23,7 @@ type SqlQuery struct {
 	IntFields   []string
 	FloatFields []string
 	BoolFields  []string
+	ZeroizeNull bool
 	//DB *sql.DB //TODO: Avoid reconnects: Push DB driver to struct?
 }
 
@@ -39,6 +40,7 @@ var sampleConfig = `
   int_fields = ["used_count"] # convert these columns to int64
   float_fields = ["bandwidth_recv"] # convert these columns to float64
   bool_fields = ["is_active"] # convert these columns to bool
+  zeroize_null = false # true: Push null results as zeros/empty strings (false: ignore fields)
 `
 
 func (s *SqlQuery) SampleConfig() string {
@@ -142,14 +144,19 @@ func (s *SqlQuery) Gather(acc telegraf.Accumulator) error {
 		//Allocate arrays for field storage
 		cells := make([]sql.RawBytes, col_count)
 		cell_refs := make([]interface{}, col_count)
-		fields := map[string]interface{}{}
-		tags := map[string]string{}
 		for i := range cells {
 			cell_refs[i] = &cells[i]
 		}
 
+		row_count := 0
+
 		//Perform splitting
 		for rows.Next() {
+			//Clear cells (if cells are null, the value is not being updated; leaking of prev values)
+			tags := map[string]string{}
+			fields := map[string]interface{}{}
+
+			//Parse row
 			err := rows.Scan(cell_refs...)
 			if err != nil {
 				return err
@@ -170,6 +177,8 @@ func (s *SqlQuery) Gather(acc telegraf.Accumulator) error {
 					if err != nil {
 						return err
 					}
+				} else if s.ZeroizeNull {
+					fields[cols[int_field_idx[i]]] = 0
 				}
 			}
 			//Extract float fields
@@ -179,6 +188,8 @@ func (s *SqlQuery) Gather(acc telegraf.Accumulator) error {
 					if err != nil {
 						return err
 					}
+				} else if s.ZeroizeNull {
+					fields[cols[float_field_idx[i]]] = 0.0
 				}
 			}
 			//Extract bool fields
@@ -188,17 +199,22 @@ func (s *SqlQuery) Gather(acc telegraf.Accumulator) error {
 					if err != nil {
 						return err
 					}
+				} else if s.ZeroizeNull {
+					fields[cols[bool_field_idx[i]]] = false
 				}
 			}
 			//Extract remaining fields as strings
 			for i := 0; i < str_field_count; i++ {
 				if cells[str_field_idx[i]] != nil {
 					fields[cols[str_field_idx[i]]] = string(cells[str_field_idx[i]])
+				} else if s.ZeroizeNull {
+					fields[cols[str_field_idx[i]]] = ""
 				}
 			}
 			acc.AddFields("sqlquery", fields, tags)
+			row_count += 1
 		}
-
+		log.Printf("Input  [sqlquery] Query '%s' pushed %d rows...", query, row_count)
 	}
 
 	return nil

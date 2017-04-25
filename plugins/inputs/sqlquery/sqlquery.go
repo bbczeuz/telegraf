@@ -109,10 +109,10 @@ func (s *SqlQuery) Gather(acc telegraf.Accumulator) error {
 
 		//Split tag and field cols
 		col_count := len(cols)
-		tag_idx := make([]int, col_count)         //Column indexes of tags
-		int_field_idx := make([]int, col_count)   //Column indexes of int fields
-		float_field_idx := make([]int, col_count) //Column indexes of int fields
-		bool_field_idx := make([]int, col_count)  //Column indexes of int fields
+		tag_idx := make([]int, col_count)         //Column indexes of tags (strings)
+		int_field_idx := make([]int, col_count)   //Column indexes of int    fields
+		float_field_idx := make([]int, col_count) //Column indexes of float  fields
+		bool_field_idx := make([]int, col_count)  //Column indexes of bool   fields
 		str_field_idx := make([]int, col_count)   //Column indexes of string fields
 
 		tag_count := 0

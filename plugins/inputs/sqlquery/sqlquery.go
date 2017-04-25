@@ -1,18 +1,18 @@
 package sqlquery
 
 import (
+	//"errors"
+	//"fmt"
 	"database/sql"
-	_ "errors"
-	_ "fmt"
-	_ "github.com/mattn/go-oci8"
+	"github.com/influxdata/telegraf"
+	"github.com/influxdata/telegraf/plugins/inputs"
 	"log"
 	"strconv"
+	"time"
 	//	_ "github.com/go-sql-driver/mysql"
 	//	_ "github.com/lib/pq"
 	//	_ "github.com/denisenkom/go-mssqldb"
-
-	"github.com/influxdata/telegraf"
-	"github.com/influxdata/telegraf/plugins/inputs"
+	_ "github.com/mattn/go-oci8"
 )
 
 type SqlQuery struct {
@@ -100,6 +100,8 @@ func (s *SqlQuery) Gather(acc telegraf.Accumulator) error {
 		}
 
 		defer rows.Close()
+
+		query_time := time.Now()
 
 		var cols []string
 		cols, err = rows.Columns()
@@ -211,7 +213,7 @@ func (s *SqlQuery) Gather(acc telegraf.Accumulator) error {
 					fields[cols[str_field_idx[i]]] = ""
 				}
 			}
-			acc.AddFields("sqlquery", fields, tags)
+			acc.AddFields("sqlquery", fields, tags, query_time)
 			row_count += 1
 		}
 		log.Printf("Input  [sqlquery] Query '%s' pushed %d rows...", query, row_count)

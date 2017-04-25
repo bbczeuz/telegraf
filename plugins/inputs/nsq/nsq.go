@@ -65,19 +65,16 @@ func (n *NSQ) Description() string {
 
 func (n *NSQ) Gather(acc telegraf.Accumulator) error {
 	var wg sync.WaitGroup
-	var outerr error
-
 	for _, e := range n.Endpoints {
 		wg.Add(1)
 		go func(e string) {
 			defer wg.Done()
-			outerr = n.gatherEndpoint(e, acc)
+			acc.AddError(n.gatherEndpoint(e, acc))
 		}(e)
 	}
 
 	wg.Wait()
-
-	return outerr
+	return nil
 }
 
 var tr = &http.Transport{

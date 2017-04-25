@@ -5,9 +5,9 @@ package sysstat
 import (
 	"bufio"
 	"encoding/csv"
-	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path"
@@ -148,34 +148,20 @@ func (s *Sysstat) Gather(acc telegraf.Accumulator) error {
 		return err
 	}
 	var wg sync.WaitGroup
-	errorChannel := make(chan error, len(s.Options)*2)
 	for option := range s.Options {
 		wg.Add(1)
 		go func(acc telegraf.Accumulator, option string) {
 			defer wg.Done()
-			if err := s.parse(acc, option, ts); err != nil {
-				errorChannel <- err
-			}
+			acc.AddError(s.parse(acc, option, ts))
 		}(acc, option)
 	}
 	wg.Wait()
-	close(errorChannel)
-
-	errorStrings := []string{}
-	for err := range errorChannel {
-		errorStrings = append(errorStrings, err.Error())
-	}
 
 	if _, err := os.Stat(s.tmpFile); err == nil {
-		if err := os.Remove(s.tmpFile); err != nil {
-			errorStrings = append(errorStrings, err.Error())
-		}
+		acc.AddError(os.Remove(s.tmpFile))
 	}
 
-	if len(errorStrings) == 0 {
-		return nil
-	}
-	return errors.New(strings.Join(errorStrings, "\n"))
+	return nil
 }
 
 // collect collects sysstat data with the collector utility sadc.
@@ -201,9 +187,37 @@ func (s *Sysstat) collect() error {
 	cmd := execCommand(s.Sadc, options...)
 	out, err := internal.CombinedOutputTimeout(cmd, time.Second*time.Duration(collectInterval+parseInterval))
 	if err != nil {
+		if err := os.Remove(s.tmpFile); err != nil {
+			log.Printf("E! failed to remove tmp file after %s command: %s", strings.Join(cmd.Args, " "), err)
+		}
 		return fmt.Errorf("failed to run command %s: %s - %s", strings.Join(cmd.Args, " "), err, string(out))
 	}
 	return nil
+}
+
+func filterEnviron(env []string, prefix string) []string {
+	newenv := env[:0]
+	for _, envvar := range env {
+		if !strings.HasPrefix(envvar, prefix) {
+			newenv = append(newenv, envvar)
+		}
+	}
+	return newenv
+}
+
+// Return the Cmd with its environment configured to use the C locale
+func withCLocale(cmd *exec.Cmd) *exec.Cmd {
+	var env []string
+	if cmd.Env != nil {
+		env = cmd.Env
+	} else {
+		env = os.Environ()
+	}
+	env = filterEnviron(env, "LANG")
+	env = filterEnviron(env, "LC_")
+	env = append(env, "LANG=C")
+	cmd.Env = env
+	return cmd
 }
 
 // parse runs Sadf on the previously saved tmpFile:
@@ -211,6 +225,7 @@ func (s *Sysstat) collect() error {
 // and parses the output to add it to the telegraf.Accumulator acc.
 func (s *Sysstat) parse(acc telegraf.Accumulator, option string, ts time.Time) error {
 	cmd := execCommand(s.Sadf, s.sadfOptions(option)...)
+	cmd = withCLocale(cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err

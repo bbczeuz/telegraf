@@ -51,7 +51,6 @@ const defaultPort = "24242"
 
 // Reads stats from all configured servers.
 func (d *Dovecot) Gather(acc telegraf.Accumulator) error {
-
 	if !validQuery[d.Type] {
 		return fmt.Errorf("Error: %s is not a valid query type\n",
 			d.Type)
@@ -61,31 +60,26 @@ func (d *Dovecot) Gather(acc telegraf.Accumulator) error {
 		d.Servers = append(d.Servers, "127.0.0.1:24242")
 	}
 
-	var wg sync.WaitGroup
-
-	var outerr error
-
 	if len(d.Filters) <= 0 {
 		d.Filters = append(d.Filters, "")
 	}
 
-	for _, serv := range d.Servers {
+	var wg sync.WaitGroup
+	for _, server := range d.Servers {
 		for _, filter := range d.Filters {
 			wg.Add(1)
-			go func(serv string, filter string) {
+			go func(s string, f string) {
 				defer wg.Done()
-				outerr = d.gatherServer(serv, acc, d.Type, filter)
-			}(serv, filter)
+				acc.AddError(d.gatherServer(s, acc, d.Type, f))
+			}(server, filter)
 		}
 	}
 
 	wg.Wait()
-
-	return outerr
+	return nil
 }
 
 func (d *Dovecot) gatherServer(addr string, acc telegraf.Accumulator, qtype string, filter string) error {
-
 	_, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		return fmt.Errorf("Error: %s on url %s\n", err, addr)

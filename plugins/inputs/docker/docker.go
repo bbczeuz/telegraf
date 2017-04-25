@@ -1,39 +1,82 @@
-package system
+package docker
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"golang.org/x/net/context"
-
-	"github.com/docker/engine-api/client"
-	"github.com/docker/engine-api/types"
+	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/client"
 	"github.com/influxdata/telegraf"
+	"github.com/influxdata/telegraf/filter"
 	"github.com/influxdata/telegraf/internal"
 	"github.com/influxdata/telegraf/plugins/inputs"
 )
+
+type DockerLabelFilter struct {
+	labelInclude filter.Filter
+	labelExclude filter.Filter
+}
 
 // Docker object
 type Docker struct {
 	Endpoint       string
 	ContainerNames []string
 	Timeout        internal.Duration
+	PerDevice      bool     `toml:"perdevice"`
+	Total          bool     `toml:"total"`
+	LabelInclude   []string `toml:"docker_label_include"`
+	LabelExclude   []string `toml:"docker_label_exclude"`
 
-	client DockerClient
+	LabelFilter DockerLabelFilter
+
+	client      *client.Client
+	engine_host string
+
+	testing             bool
+	labelFiltersCreated bool
 }
 
-// DockerClient interface, useful for testing
-type DockerClient interface {
-	Info(ctx context.Context) (types.Info, error)
-	ContainerList(ctx context.Context, options types.ContainerListOptions) ([]types.Container, error)
-	ContainerStats(ctx context.Context, containerID string, stream bool) (io.ReadCloser, error)
+// infoWrapper wraps client.Client.List for testing.
+func infoWrapper(c *client.Client, ctx context.Context) (types.Info, error) {
+	if c != nil {
+		return c.Info(ctx)
+	}
+	fc := FakeDockerClient{}
+	return fc.Info(ctx)
+}
+
+// listWrapper wraps client.Client.ContainerList for testing.
+func listWrapper(
+	c *client.Client,
+	ctx context.Context,
+	options types.ContainerListOptions,
+) ([]types.Container, error) {
+	if c != nil {
+		return c.ContainerList(ctx, options)
+	}
+	fc := FakeDockerClient{}
+	return fc.ContainerList(ctx, options)
+}
+
+// statsWrapper wraps client.Client.ContainerStats for testing.
+func statsWrapper(
+	c *client.Client,
+	ctx context.Context,
+	containerID string,
+	stream bool,
+) (types.ContainerStats, error) {
+	if c != nil {
+		return c.ContainerStats(ctx, containerID, stream)
+	}
+	fc := FakeDockerClient{}
+	return fc.ContainerStats(ctx, containerID, stream)
 }
 
 // KB, MB, GB, TB, PB...human friendly
@@ -58,6 +101,17 @@ var sampleConfig = `
   container_names = []
   ## Timeout for docker list, info, and stats commands
   timeout = "5s"
+
+  ## Whether to report for each container per-device blkio (8:0, 8:1...) and
+  ## network (eth0, eth1, ...) stats or not
+  perdevice = true
+  ## Whether to report for each container total blkio and network stats or not
+  total = false
+
+  ## docker labels to include and exclude as tags.  Globs accepted.
+  ## Note that an empty array for both will include all labels as tags
+  docker_label_include = []
+  docker_label_exclude = []
 `
 
 // Description returns input description
@@ -70,7 +124,7 @@ func (d *Docker) SampleConfig() string { return sampleConfig }
 
 // Gather starts stats collection
 func (d *Docker) Gather(acc telegraf.Accumulator) error {
-	if d.client == nil {
+	if d.client == nil && !d.testing {
 		var c *client.Client
 		var err error
 		defaultHeaders := map[string]string{"User-Agent": "engine-api-cli-1.0"}
@@ -92,18 +146,26 @@ func (d *Docker) Gather(acc telegraf.Accumulator) error {
 		}
 		d.client = c
 	}
+	// Create label filters if not already created
+	if !d.labelFiltersCreated {
+		err := d.createLabelFilters()
+		if err != nil {
+			return err
+		}
+		d.labelFiltersCreated = true
+	}
 
 	// Get daemon info
 	err := d.gatherInfo(acc)
 	if err != nil {
-		fmt.Println(err.Error())
+		acc.AddError(err)
 	}
 
 	// List containers
 	opts := types.ContainerListOptions{}
 	ctx, cancel := context.WithTimeout(context.Background(), d.Timeout.Duration)
 	defer cancel()
-	containers, err := d.client.ContainerList(ctx, opts)
+	containers, err := listWrapper(d.client, ctx, opts)
 	if err != nil {
 		return err
 	}
@@ -116,8 +178,8 @@ func (d *Docker) Gather(acc telegraf.Accumulator) error {
 			defer wg.Done()
 			err := d.gatherContainer(c, acc)
 			if err != nil {
-				log.Printf("Error gathering container %s stats: %s\n",
-					c.Names, err.Error())
+				acc.AddError(fmt.Errorf("E! Error gathering container %s stats: %s\n",
+					c.Names, err.Error()))
 			}
 		}(container)
 	}
@@ -134,15 +196,19 @@ func (d *Docker) gatherInfo(acc telegraf.Accumulator) error {
 	// Get info from docker daemon
 	ctx, cancel := context.WithTimeout(context.Background(), d.Timeout.Duration)
 	defer cancel()
-	info, err := d.client.Info(ctx)
+	info, err := infoWrapper(d.client, ctx)
 	if err != nil {
 		return err
 	}
+	d.engine_host = info.Name
 
 	fields := map[string]interface{}{
 		"n_cpus":                  info.NCPU,
 		"n_used_file_descriptors": info.NFd,
 		"n_containers":            info.Containers,
+		"n_containers_running":    info.ContainersRunning,
+		"n_containers_stopped":    info.ContainersStopped,
+		"n_containers_paused":     info.ContainersPaused,
 		"n_images":                info.Images,
 		"n_goroutines":            info.NGoroutines,
 		"n_listener_events":       info.NEventsListener,
@@ -150,11 +216,11 @@ func (d *Docker) gatherInfo(acc telegraf.Accumulator) error {
 	// Add metrics
 	acc.AddFields("docker",
 		fields,
-		nil,
+		map[string]string{"engine_host": d.engine_host},
 		now)
 	acc.AddFields("docker",
 		map[string]interface{}{"memory_total": info.MemTotal},
-		map[string]string{"unit": "bytes"},
+		map[string]string{"unit": "bytes", "engine_host": d.engine_host},
 		now)
 	// Get storage metrics
 	for _, rawData := range info.DriverStatus {
@@ -168,7 +234,7 @@ func (d *Docker) gatherInfo(acc telegraf.Accumulator) error {
 			// pool blocksize
 			acc.AddFields("docker",
 				map[string]interface{}{"pool_blocksize": value},
-				map[string]string{"unit": "bytes"},
+				map[string]string{"unit": "bytes", "engine_host": d.engine_host},
 				now)
 		} else if strings.HasPrefix(name, "data_space_") {
 			// data space
@@ -183,13 +249,13 @@ func (d *Docker) gatherInfo(acc telegraf.Accumulator) error {
 	if len(dataFields) > 0 {
 		acc.AddFields("docker_data",
 			dataFields,
-			map[string]string{"unit": "bytes"},
+			map[string]string{"unit": "bytes", "engine_host": d.engine_host},
 			now)
 	}
 	if len(metadataFields) > 0 {
 		acc.AddFields("docker_metadata",
 			metadataFields,
-			map[string]string{"unit": "bytes"},
+			map[string]string{"unit": "bytes", "engine_host": d.engine_host},
 			now)
 	}
 	return nil
@@ -207,9 +273,23 @@ func (d *Docker) gatherContainer(
 		cname = strings.TrimPrefix(container.Names[0], "/")
 	}
 
+	// the image name sometimes has a version part, or a private repo
+	//   ie, rabbitmq:3-management or docker.someco.net:4443/rabbitmq:3-management
+	imageName := ""
+	imageVersion := "unknown"
+	i := strings.LastIndex(container.Image, ":") // index of last ':' character
+	if i > -1 {
+		imageVersion = container.Image[i+1:]
+		imageName = container.Image[:i]
+	} else {
+		imageName = container.Image
+	}
+
 	tags := map[string]string{
-		"container_name":  cname,
-		"container_image": container.Image,
+		"engine_host":       d.engine_host,
+		"container_name":    cname,
+		"container_image":   imageName,
+		"container_version": imageVersion,
 	}
 	if len(d.ContainerNames) > 0 {
 		if !sliceContains(cname, d.ContainerNames) {
@@ -219,12 +299,12 @@ func (d *Docker) gatherContainer(
 
 	ctx, cancel := context.WithTimeout(context.Background(), d.Timeout.Duration)
 	defer cancel()
-	r, err := d.client.ContainerStats(ctx, container.ID, false)
+	r, err := statsWrapper(d.client, ctx, container.ID, false)
 	if err != nil {
 		return fmt.Errorf("Error getting docker stats: %s", err.Error())
 	}
-	defer r.Close()
-	dec := json.NewDecoder(r)
+	defer r.Body.Close()
+	dec := json.NewDecoder(r.Body)
 	if err = dec.Decode(&v); err != nil {
 		if err == io.EOF {
 			return nil
@@ -234,10 +314,14 @@ func (d *Docker) gatherContainer(
 
 	// Add labels to tags
 	for k, label := range container.Labels {
-		tags[k] = label
+		if len(d.LabelInclude) == 0 || d.LabelFilter.labelInclude.Match(k) {
+			if len(d.LabelExclude) == 0 || !d.LabelFilter.labelExclude.Match(k) {
+				tags[k] = label
+			}
+		}
 	}
 
-	gatherContainerStats(v, acc, tags, container.ID)
+	gatherContainerStats(v, acc, tags, container.ID, d.PerDevice, d.Total)
 
 	return nil
 }
@@ -247,6 +331,8 @@ func gatherContainerStats(
 	acc telegraf.Accumulator,
 	tags map[string]string,
 	id string,
+	perDevice bool,
+	total bool,
 ) {
 	now := stat.Read
 
@@ -314,6 +400,7 @@ func gatherContainerStats(
 		acc.AddFields("docker_container_cpu", fields, percputags, now)
 	}
 
+	totalNetworkStatMap := make(map[string]interface{})
 	for network, netstats := range stat.Networks {
 		netfields := map[string]interface{}{
 			"rx_dropped":   netstats.RxDropped,
@@ -327,12 +414,46 @@ func gatherContainerStats(
 			"container_id": id,
 		}
 		// Create a new network tag dictionary for the "network" tag
-		nettags := copyTags(tags)
-		nettags["network"] = network
-		acc.AddFields("docker_container_net", netfields, nettags, now)
+		if perDevice {
+			nettags := copyTags(tags)
+			nettags["network"] = network
+			acc.AddFields("docker_container_net", netfields, nettags, now)
+		}
+		if total {
+			for field, value := range netfields {
+				if field == "container_id" {
+					continue
+				}
+
+				var uintV uint64
+				switch v := value.(type) {
+				case uint64:
+					uintV = v
+				case int64:
+					uintV = uint64(v)
+				default:
+					continue
+				}
+
+				_, ok := totalNetworkStatMap[field]
+				if ok {
+					totalNetworkStatMap[field] = totalNetworkStatMap[field].(uint64) + uintV
+				} else {
+					totalNetworkStatMap[field] = uintV
+				}
+			}
+		}
 	}
 
-	gatherBlockIOMetrics(stat, acc, tags, now, id)
+	// totalNetworkStatMap could be empty if container is running with --net=host.
+	if total && len(totalNetworkStatMap) != 0 {
+		nettags := copyTags(tags)
+		nettags["network"] = "total"
+		totalNetworkStatMap["container_id"] = id
+		acc.AddFields("docker_container_net", totalNetworkStatMap, nettags, now)
+	}
+
+	gatherBlockIOMetrics(stat, acc, tags, now, id, perDevice, total)
 }
 
 func calculateMemPercent(stat *types.StatsJSON) float64 {
@@ -361,6 +482,8 @@ func gatherBlockIOMetrics(
 	tags map[string]string,
 	now time.Time,
 	id string,
+	perDevice bool,
+	total bool,
 ) {
 	blkioStats := stat.BlkioStats
 	// Make a map of devices to their block io stats
@@ -422,11 +545,44 @@ func gatherBlockIOMetrics(
 		deviceStatMap[device]["sectors_recursive"] = metric.Value
 	}
 
+	totalStatMap := make(map[string]interface{})
 	for device, fields := range deviceStatMap {
-		iotags := copyTags(tags)
-		iotags["device"] = device
 		fields["container_id"] = id
-		acc.AddFields("docker_container_blkio", fields, iotags, now)
+		if perDevice {
+			iotags := copyTags(tags)
+			iotags["device"] = device
+			acc.AddFields("docker_container_blkio", fields, iotags, now)
+		}
+		if total {
+			for field, value := range fields {
+				if field == "container_id" {
+					continue
+				}
+
+				var uintV uint64
+				switch v := value.(type) {
+				case uint64:
+					uintV = v
+				case int64:
+					uintV = uint64(v)
+				default:
+					continue
+				}
+
+				_, ok := totalStatMap[field]
+				if ok {
+					totalStatMap[field] = totalStatMap[field].(uint64) + uintV
+				} else {
+					totalStatMap[field] = uintV
+				}
+			}
+		}
+	}
+	if total {
+		totalStatMap["container_id"] = id
+		iotags := copyTags(tags)
+		iotags["device"] = "total"
+		acc.AddFields("docker_container_blkio", totalStatMap, iotags, now)
 	}
 }
 
@@ -468,10 +624,32 @@ func parseSize(sizeStr string) (int64, error) {
 	return int64(size), nil
 }
 
+func (d *Docker) createLabelFilters() error {
+	if len(d.LabelInclude) != 0 && d.LabelFilter.labelInclude == nil {
+		var err error
+		d.LabelFilter.labelInclude, err = filter.Compile(d.LabelInclude)
+		if err != nil {
+			return err
+		}
+	}
+
+	if len(d.LabelExclude) != 0 && d.LabelFilter.labelExclude == nil {
+		var err error
+		d.LabelFilter.labelExclude, err = filter.Compile(d.LabelExclude)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func init() {
 	inputs.Add("docker", func() telegraf.Input {
 		return &Docker{
-			Timeout: internal.Duration{Duration: time.Second * 5},
+			PerDevice:           true,
+			Timeout:             internal.Duration{Duration: time.Second * 5},
+			labelFiltersCreated: false,
 		}
 	})
 }

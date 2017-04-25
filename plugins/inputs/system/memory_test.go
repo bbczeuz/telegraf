@@ -19,8 +19,8 @@ func TestMemStats(t *testing.T) {
 		Available: 7600,
 		Used:      5000,
 		Free:      1235,
-		// Active:      8134,
-		// Inactive:    1124,
+		Active:    8134,
+		Inactive:  1124,
 		// Buffers:     771,
 		// Cached:      4312,
 		// Wired:       134,
@@ -52,6 +52,8 @@ func TestMemStats(t *testing.T) {
 		"free":              uint64(1235),
 		"cached":            uint64(0),
 		"buffered":          uint64(0),
+		"active":            uint64(8134),
+		"inactive":          uint64(1124),
 	}
 	acc.AssertContainsTaggedFields(t, "mem", memfields, make(map[string]string))
 
@@ -65,8 +67,6 @@ func TestMemStats(t *testing.T) {
 		"used":         uint64(1232),
 		"used_percent": float64(12.2),
 		"free":         uint64(6412),
-		"in":           uint64(7),
-		"out":          uint64(830),
 	}
 	acc.AssertContainsTaggedFields(t, "swap", swapfields, make(map[string]string))
 }

@@ -21,7 +21,7 @@ func TestSingleNTPQ(t *testing.T) {
 	}
 
 	acc := testutil.Accumulator{}
-	assert.NoError(t, n.Gather(&acc))
+	assert.NoError(t, acc.GatherError(n.Gather))
 
 	fields := map[string]interface{}{
 		"when":   int64(101),
@@ -30,6 +30,35 @@ func TestSingleNTPQ(t *testing.T) {
 		"delay":  float64(51.016),
 		"offset": float64(233.010),
 		"jitter": float64(17.462),
+	}
+	tags := map[string]string{
+		"remote":       "uschi5-ntp-002.",
+		"state_prefix": "*",
+		"refid":        "10.177.80.46",
+		"stratum":      "2",
+		"type":         "u",
+	}
+	acc.AssertContainsTaggedFields(t, "ntpq", fields, tags)
+}
+
+func TestMissingJitterField(t *testing.T) {
+	tt := tester{
+		ret: []byte(missingJitterField),
+		err: nil,
+	}
+	n := &NTPQ{
+		runQ: tt.runqTest,
+	}
+
+	acc := testutil.Accumulator{}
+	assert.NoError(t, acc.GatherError(n.Gather))
+
+	fields := map[string]interface{}{
+		"when":   int64(101),
+		"poll":   int64(256),
+		"reach":  int64(37),
+		"delay":  float64(51.016),
+		"offset": float64(233.010),
 	}
 	tags := map[string]string{
 		"remote":       "uschi5-ntp-002.",
@@ -51,7 +80,7 @@ func TestBadIntNTPQ(t *testing.T) {
 	}
 
 	acc := testutil.Accumulator{}
-	assert.NoError(t, n.Gather(&acc))
+	assert.Error(t, acc.GatherError(n.Gather))
 
 	fields := map[string]interface{}{
 		"when":   int64(101),
@@ -80,7 +109,7 @@ func TestBadFloatNTPQ(t *testing.T) {
 	}
 
 	acc := testutil.Accumulator{}
-	assert.NoError(t, n.Gather(&acc))
+	assert.Error(t, acc.GatherError(n.Gather))
 
 	fields := map[string]interface{}{
 		"when":   int64(2),
@@ -109,7 +138,7 @@ func TestDaysNTPQ(t *testing.T) {
 	}
 
 	acc := testutil.Accumulator{}
-	assert.NoError(t, n.Gather(&acc))
+	assert.NoError(t, acc.GatherError(n.Gather))
 
 	fields := map[string]interface{}{
 		"when":   int64(172800),
@@ -139,10 +168,10 @@ func TestHoursNTPQ(t *testing.T) {
 	}
 
 	acc := testutil.Accumulator{}
-	assert.NoError(t, n.Gather(&acc))
+	assert.NoError(t, acc.GatherError(n.Gather))
 
 	fields := map[string]interface{}{
-		"when":   int64(720),
+		"when":   int64(7200),
 		"poll":   int64(256),
 		"reach":  int64(37),
 		"delay":  float64(51.016),
@@ -169,7 +198,7 @@ func TestMinutesNTPQ(t *testing.T) {
 	}
 
 	acc := testutil.Accumulator{}
-	assert.NoError(t, n.Gather(&acc))
+	assert.NoError(t, acc.GatherError(n.Gather))
 
 	fields := map[string]interface{}{
 		"when":   int64(120),
@@ -199,7 +228,7 @@ func TestBadWhenNTPQ(t *testing.T) {
 	}
 
 	acc := testutil.Accumulator{}
-	assert.NoError(t, n.Gather(&acc))
+	assert.Error(t, acc.GatherError(n.Gather))
 
 	fields := map[string]interface{}{
 		"poll":   int64(256),
@@ -228,7 +257,7 @@ func TestMultiNTPQ(t *testing.T) {
 	}
 
 	acc := testutil.Accumulator{}
-	assert.NoError(t, n.Gather(&acc))
+	assert.NoError(t, acc.GatherError(n.Gather))
 
 	fields := map[string]interface{}{
 		"delay":  float64(54.033),
@@ -274,7 +303,7 @@ func TestBadHeaderNTPQ(t *testing.T) {
 	}
 
 	acc := testutil.Accumulator{}
-	assert.NoError(t, n.Gather(&acc))
+	assert.NoError(t, acc.GatherError(n.Gather))
 
 	fields := map[string]interface{}{
 		"when":   int64(101),
@@ -304,7 +333,7 @@ func TestMissingDelayColumnNTPQ(t *testing.T) {
 	}
 
 	acc := testutil.Accumulator{}
-	assert.NoError(t, n.Gather(&acc))
+	assert.NoError(t, acc.GatherError(n.Gather))
 
 	fields := map[string]interface{}{
 		"when":   int64(101),
@@ -332,7 +361,7 @@ func TestFailedNTPQ(t *testing.T) {
 	}
 
 	acc := testutil.Accumulator{}
-	assert.Error(t, n.Gather(&acc))
+	assert.Error(t, acc.GatherError(n.Gather))
 }
 
 type tester struct {
@@ -379,6 +408,11 @@ func resetVars() {
 var singleNTPQ = `     remote           refid      st t when poll reach   delay   offset  jitter
 ==============================================================================
 *uschi5-ntp-002. 10.177.80.46     2 u  101  256   37   51.016  233.010  17.462
+`
+
+var missingJitterField = `     remote           refid      st t when poll reach   delay   offset  jitter
+==============================================================================
+*uschi5-ntp-002. 10.177.80.46     2 u  101  256   37   51.016  233.010
 `
 
 var badHeaderNTPQ = `remote      refid   foobar t when poll reach   delay   offset  jitter

@@ -13,6 +13,17 @@ Example for Kubernetes apiserver
   urls = ["http://my-kube-apiserver:8080/metrics"]
 ```
 
+Specify a 10 second timeout for slower/over-loaded clients
+```toml
+# Get all metrics from Kube-apiserver
+[[inputs.prometheus]]
+  # An array of urls to scrape metrics from.
+  urls = ["http://my-kube-apiserver:8080/metrics"]
+
+  # Specify timeout duration for slower prometheus clients (default is 3s)
+  response_timeout = "10s"
+```
+
 You can use more complex configuration
 to filter and some tags
 
@@ -28,6 +39,26 @@ to filter and some tags
   # Add tags to be able to make beautiful dashboards
   [inputs.prometheus.tags]
     kubeservice = "kube-apiserver"
+```
+
+```toml
+# Authorize with a bearer token skipping cert verification
+[[inputs.prometheus]]
+  # An array of urls to scrape metrics from.
+  urls = ["http://my-kube-apiserver:8080/metrics"]
+  bearer_token = '/path/to/bearer/token'
+  insecure_skip_verify = true
+```
+
+```toml
+# Authorize using x509 certs
+[[inputs.prometheus]]
+  # An array of urls to scrape metrics from.
+  urls = ["https://my-kube-apiserver:8080/metrics"]
+
+  ssl_ca = '/path/to/cafile'
+  ssl_cert = '/path/to/certfile'
+  ssl_key = '/path/to/keyfile'
 ```
 
 ### Measurements & Fields & Tags:

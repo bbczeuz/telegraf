@@ -34,24 +34,22 @@ func (n *Nginx) Description() string {
 
 func (n *Nginx) Gather(acc telegraf.Accumulator) error {
 	var wg sync.WaitGroup
-	var outerr error
 
 	for _, u := range n.Urls {
 		addr, err := url.Parse(u)
 		if err != nil {
-			return fmt.Errorf("Unable to parse address '%s': %s", u, err)
+			acc.AddError(fmt.Errorf("Unable to parse address '%s': %s", u, err))
 		}
 
 		wg.Add(1)
 		go func(addr *url.URL) {
 			defer wg.Done()
-			outerr = n.gatherUrl(addr, acc)
+			acc.AddError(n.gatherUrl(addr, acc))
 		}(addr)
 	}
 
 	wg.Wait()
-
-	return outerr
+	return nil
 }
 
 var tr = &http.Transport{
@@ -97,11 +95,12 @@ func (n *Nginx) gatherUrl(addr *url.URL, acc telegraf.Accumulator) error {
 	if err != nil {
 		return err
 	}
-	data := strings.SplitN(strings.TrimSpace(line), " ", 3)
+	data := strings.Fields(line)
 	accepts, err := strconv.ParseUint(data[0], 10, 64)
 	if err != nil {
 		return err
 	}
+
 	handled, err := strconv.ParseUint(data[1], 10, 64)
 	if err != nil {
 		return err
@@ -116,7 +115,7 @@ func (n *Nginx) gatherUrl(addr *url.URL, acc telegraf.Accumulator) error {
 	if err != nil {
 		return err
 	}
-	data = strings.SplitN(strings.TrimSpace(line), " ", 6)
+	data = strings.Fields(line)
 	reading, err := strconv.ParseUint(data[1], 10, 64)
 	if err != nil {
 		return err

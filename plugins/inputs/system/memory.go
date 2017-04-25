@@ -30,10 +30,12 @@ func (s *MemStats) Gather(acc telegraf.Accumulator) error {
 		"free":              vm.Free,
 		"cached":            vm.Cached,
 		"buffered":          vm.Buffers,
+		"active":            vm.Active,
+		"inactive":          vm.Inactive,
 		"used_percent":      100 * float64(vm.Used) / float64(vm.Total),
 		"available_percent": 100 * float64(vm.Available) / float64(vm.Total),
 	}
-	acc.AddFields("mem", fields, nil)
+	acc.AddCounter("mem", fields, nil)
 
 	return nil
 }
@@ -54,25 +56,29 @@ func (s *SwapStats) Gather(acc telegraf.Accumulator) error {
 		return fmt.Errorf("error getting swap memory info: %s", err)
 	}
 
-	fields := map[string]interface{}{
+	fieldsG := map[string]interface{}{
 		"total":        swap.Total,
 		"used":         swap.Used,
 		"free":         swap.Free,
 		"used_percent": swap.UsedPercent,
-		"in":           swap.Sin,
-		"out":          swap.Sout,
 	}
-	acc.AddFields("swap", fields, nil)
+	fieldsC := map[string]interface{}{
+		"in":  swap.Sin,
+		"out": swap.Sout,
+	}
+	acc.AddGauge("swap", fieldsG, nil)
+	acc.AddCounter("swap", fieldsC, nil)
 
 	return nil
 }
 
 func init() {
+	ps := newSystemPS()
 	inputs.Add("mem", func() telegraf.Input {
-		return &MemStats{ps: &systemPS{}}
+		return &MemStats{ps: ps}
 	})
 
 	inputs.Add("swap", func() telegraf.Input {
-		return &SwapStats{ps: &systemPS{}}
+		return &SwapStats{ps: ps}
 	})
 }

@@ -3,12 +3,13 @@ package dns_query
 import (
 	"errors"
 	"fmt"
-	"github.com/influxdata/telegraf"
-	"github.com/influxdata/telegraf/plugins/inputs"
 	"github.com/miekg/dns"
 	"net"
 	"strconv"
 	"time"
+
+	"github.com/influxdata/telegraf"
+	"github.com/influxdata/telegraf/plugins/inputs"
 )
 
 type DnsQuery struct {
@@ -55,12 +56,11 @@ func (d *DnsQuery) Description() string {
 }
 func (d *DnsQuery) Gather(acc telegraf.Accumulator) error {
 	d.setDefaultValues()
+
 	for _, domain := range d.Domains {
 		for _, server := range d.Servers {
 			dnsQueryTime, err := d.getDnsQueryTime(domain, server)
-			if err != nil {
-				return err
-			}
+			acc.AddError(err)
 			tags := map[string]string{
 				"server":      server,
 				"domain":      domain,

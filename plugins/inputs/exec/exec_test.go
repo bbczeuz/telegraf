@@ -1,7 +1,9 @@
 package exec
 
 import (
+	"bytes"
 	"fmt"
+	"runtime"
 	"testing"
 
 	"github.com/influxdata/telegraf"
@@ -34,7 +36,9 @@ const malformedJson = `
     "status": "green",
 `
 
-const lineProtocol = "cpu,host=foo,datacenter=us-east usage_idle=99,usage_busy=1"
+const lineProtocol = "cpu,host=foo,datacenter=us-east usage_idle=99,usage_busy=1\n"
+const lineProtocolEmpty = ""
+const lineProtocolShort = "ab"
 
 const lineProtocolMulti = `
 cpu,cpu=cpu0,host=foo,datacenter=us-east usage_idle=99,usage_busy=1
@@ -45,6 +49,29 @@ cpu,cpu=cpu4,host=foo,datacenter=us-east usage_idle=99,usage_busy=1
 cpu,cpu=cpu5,host=foo,datacenter=us-east usage_idle=99,usage_busy=1
 cpu,cpu=cpu6,host=foo,datacenter=us-east usage_idle=99,usage_busy=1
 `
+
+type CarriageReturnTest struct {
+	input  []byte
+	output []byte
+}
+
+var crTests = []CarriageReturnTest{
+	{[]byte{0x4c, 0x69, 0x6e, 0x65, 0x20, 0x31, 0x0d, 0x0a, 0x4c, 0x69,
+		0x6e, 0x65, 0x20, 0x32, 0x0d, 0x0a, 0x4c, 0x69, 0x6e, 0x65,
+		0x20, 0x33},
+		[]byte{0x4c, 0x69, 0x6e, 0x65, 0x20, 0x31, 0x0a, 0x4c, 0x69, 0x6e,
+			0x65, 0x20, 0x32, 0x0a, 0x4c, 0x69, 0x6e, 0x65, 0x20, 0x33}},
+	{[]byte{0x4c, 0x69, 0x6e, 0x65, 0x20, 0x31, 0x0a, 0x4c, 0x69, 0x6e,
+		0x65, 0x20, 0x32, 0x0a, 0x4c, 0x69, 0x6e, 0x65, 0x20, 0x33},
+		[]byte{0x4c, 0x69, 0x6e, 0x65, 0x20, 0x31, 0x0a, 0x4c, 0x69, 0x6e,
+			0x65, 0x20, 0x32, 0x0a, 0x4c, 0x69, 0x6e, 0x65, 0x20, 0x33}},
+	{[]byte{0x54, 0x68, 0x69, 0x73, 0x20, 0x69, 0x73, 0x20, 0x61, 0x6c,
+		0x6c, 0x20, 0x6f, 0x6e, 0x65, 0x20, 0x62, 0x69, 0x67, 0x20,
+		0x6c, 0x69, 0x6e, 0x65},
+		[]byte{0x54, 0x68, 0x69, 0x73, 0x20, 0x69, 0x73, 0x20, 0x61, 0x6c,
+			0x6c, 0x20, 0x6f, 0x6e, 0x65, 0x20, 0x62, 0x69, 0x67, 0x20,
+			0x6c, 0x69, 0x6e, 0x65}},
+}
 
 type runnerMock struct {
 	out []byte
@@ -74,7 +101,7 @@ func TestExec(t *testing.T) {
 	}
 
 	var acc testutil.Accumulator
-	err := e.Gather(&acc)
+	err := acc.GatherError(e.Gather)
 	require.NoError(t, err)
 	assert.Equal(t, acc.NFields(), 8, "non-numeric measurements should be ignored")
 
@@ -100,8 +127,7 @@ func TestExecMalformed(t *testing.T) {
 	}
 
 	var acc testutil.Accumulator
-	err := e.Gather(&acc)
-	require.Error(t, err)
+	require.Error(t, acc.GatherError(e.Gather))
 	assert.Equal(t, acc.NFields(), 0, "No new points should have been added")
 }
 
@@ -114,8 +140,7 @@ func TestCommandError(t *testing.T) {
 	}
 
 	var acc testutil.Accumulator
-	err := e.Gather(&acc)
-	require.Error(t, err)
+	require.Error(t, acc.GatherError(e.Gather))
 	assert.Equal(t, acc.NFields(), 0, "No new points should have been added")
 }
 
@@ -128,8 +153,7 @@ func TestLineProtocolParse(t *testing.T) {
 	}
 
 	var acc testutil.Accumulator
-	err := e.Gather(&acc)
-	require.NoError(t, err)
+	require.NoError(t, acc.GatherError(e.Gather))
 
 	fields := map[string]interface{}{
 		"usage_idle": float64(99),
@@ -142,6 +166,33 @@ func TestLineProtocolParse(t *testing.T) {
 	acc.AssertContainsTaggedFields(t, "cpu", fields, tags)
 }
 
+func TestLineProtocolEmptyParse(t *testing.T) {
+	parser, _ := parsers.NewInfluxParser()
+	e := &Exec{
+		runner:   newRunnerMock([]byte(lineProtocolEmpty), nil),
+		Commands: []string{"line-protocol"},
+		parser:   parser,
+	}
+
+	var acc testutil.Accumulator
+	err := e.Gather(&acc)
+	require.NoError(t, err)
+}
+
+func TestLineProtocolShortParse(t *testing.T) {
+	parser, _ := parsers.NewInfluxParser()
+	e := &Exec{
+		runner:   newRunnerMock([]byte(lineProtocolShort), nil),
+		Commands: []string{"line-protocol"},
+		parser:   parser,
+	}
+
+	var acc testutil.Accumulator
+	err := acc.GatherError(e.Gather)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "buffer too short", "A buffer too short error was expected")
+}
+
 func TestLineProtocolParseMultiple(t *testing.T) {
 	parser, _ := parsers.NewInfluxParser()
 	e := &Exec{
@@ -151,7 +202,7 @@ func TestLineProtocolParseMultiple(t *testing.T) {
 	}
 
 	var acc testutil.Accumulator
-	err := e.Gather(&acc)
+	err := acc.GatherError(e.Gather)
 	require.NoError(t, err)
 
 	fields := map[string]interface{}{
@@ -177,7 +228,7 @@ func TestExecCommandWithGlob(t *testing.T) {
 	e.SetParser(parser)
 
 	var acc testutil.Accumulator
-	err := e.Gather(&acc)
+	err := acc.GatherError(e.Gather)
 	require.NoError(t, err)
 
 	fields := map[string]interface{}{
@@ -193,7 +244,7 @@ func TestExecCommandWithoutGlob(t *testing.T) {
 	e.SetParser(parser)
 
 	var acc testutil.Accumulator
-	err := e.Gather(&acc)
+	err := acc.GatherError(e.Gather)
 	require.NoError(t, err)
 
 	fields := map[string]interface{}{
@@ -209,11 +260,29 @@ func TestExecCommandWithoutGlobAndPath(t *testing.T) {
 	e.SetParser(parser)
 
 	var acc testutil.Accumulator
-	err := e.Gather(&acc)
+	err := acc.GatherError(e.Gather)
 	require.NoError(t, err)
 
 	fields := map[string]interface{}{
 		"value": "metric_value",
 	}
 	acc.AssertContainsFields(t, "metric", fields)
+}
+
+func TestRemoveCarriageReturns(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// Test that all carriage returns are removed
+		for _, test := range crTests {
+			b := bytes.NewBuffer(test.input)
+			out := removeCarriageReturns(*b)
+			assert.True(t, bytes.Equal(test.output, out.Bytes()))
+		}
+	} else {
+		// Test that the buffer is returned unaltered
+		for _, test := range crTests {
+			b := bytes.NewBuffer(test.input)
+			out := removeCarriageReturns(*b)
+			assert.True(t, bytes.Equal(test.input, out.Bytes()))
+		}
+	}
 }

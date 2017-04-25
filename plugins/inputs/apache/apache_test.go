@@ -36,11 +36,12 @@ func TestHTTPApache(t *testing.T) {
 	defer ts.Close()
 
 	a := Apache{
-		Urls: []string{ts.URL},
+		// Fetch it 2 times to catch possible data races.
+		Urls: []string{ts.URL, ts.URL},
 	}
 
 	var acc testutil.Accumulator
-	err := a.Gather(&acc)
+	err := acc.GatherError(a.Gather)
 	require.NoError(t, err)
 
 	fields := map[string]interface{}{

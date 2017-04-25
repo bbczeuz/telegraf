@@ -47,14 +47,13 @@ func (z *Zookeeper) Gather(acc telegraf.Accumulator) error {
 	}
 
 	for _, serverAddress := range z.Servers {
-		if err := z.gatherServer(serverAddress, acc); err != nil {
-			return err
-		}
+		acc.AddError(z.gatherServer(serverAddress, acc))
 	}
 	return nil
 }
 
 func (z *Zookeeper) gatherServer(address string, acc telegraf.Accumulator) error {
+	var zookeeper_state string
 	_, _, err := net.SplitHostPort(address)
 	if err != nil {
 		address = address + ":2181"
@@ -78,7 +77,6 @@ func (z *Zookeeper) gatherServer(address string, acc telegraf.Accumulator) error
 	if len(service) != 2 {
 		return fmt.Errorf("Invalid service address: %s", address)
 	}
-	tags := map[string]string{"server": service[0], "port": service[1]}
 
 	fields := make(map[string]interface{})
 	for scanner.Scan() {
@@ -92,14 +90,23 @@ func (z *Zookeeper) gatherServer(address string, acc telegraf.Accumulator) error
 		}
 
 		measurement := strings.TrimPrefix(parts[1], "zk_")
-		sValue := string(parts[2])
-
-		iVal, err := strconv.ParseInt(sValue, 10, 64)
-		if err == nil {
-			fields[measurement] = iVal
+		if measurement == "server_state" {
+			zookeeper_state = parts[2]
 		} else {
-			fields[measurement] = sValue
+			sValue := string(parts[2])
+
+			iVal, err := strconv.ParseInt(sValue, 10, 64)
+			if err == nil {
+				fields[measurement] = iVal
+			} else {
+				fields[measurement] = sValue
+			}
 		}
+	}
+	tags := map[string]string{
+		"server": service[0],
+		"port":   service[1],
+		"state":  zookeeper_state,
 	}
 	acc.AddFields("zookeeper", fields, tags)
 

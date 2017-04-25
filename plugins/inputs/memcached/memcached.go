@@ -50,7 +50,6 @@ var sendMetrics = []string{
 	"decr_misses",
 	"cas_hits",
 	"cas_misses",
-	"evictions",
 	"bytes_read",
 	"bytes_written",
 	"threads",
@@ -74,15 +73,11 @@ func (m *Memcached) Gather(acc telegraf.Accumulator) error {
 	}
 
 	for _, serverAddress := range m.Servers {
-		if err := m.gatherServer(serverAddress, false, acc); err != nil {
-			return err
-		}
+		acc.AddError(m.gatherServer(serverAddress, false, acc))
 	}
 
 	for _, unixAddress := range m.UnixSockets {
-		if err := m.gatherServer(unixAddress, true, acc); err != nil {
-			return err
-		}
+		acc.AddError(m.gatherServer(unixAddress, true, acc))
 	}
 
 	return nil
